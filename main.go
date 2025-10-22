@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -414,11 +415,31 @@ var brightnessCmd = &cobra.Command{
 }
 
 var colorCmd = &cobra.Command{
-	Use:   "color [light-id/light-name/group] [red] [green] [blue]",
+	Use:   "color [light-id/light-name/group] [red] [green] [blue] [brightness] OR [light-id/light-name/group] [RRGGBB|RRGGBBAA|RGB|RGBA]",
 	Short: "Set RGB color of lights",
-	Long:  `Set the RGB color of one or more lights. RGB values should be between 0-255. Use 'g:groupname' to set color for a group.`,
-	Args:  cobra.ExactArgs(4),
+	Long:  `Set the RGB color of one or more lights. RGB values should be between 0-255. Brightness is optional (0-254). You can also use Hex color codes (RRGGBB, RRGGBBAA, RGB, RGBA). Use 'g:groupname' to set color for a group.`,
+	Args:  cobra.RangeArgs(1, 5),
 	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 2 {
+			// Check if args[1] is a hex color code using regex
+			hex := args[1]
+			if (len(hex) > 2) && isHexColor(hex) {
+				r, g, b, a := parseHexColor(hex)
+				args[1] = fmt.Sprintf("%d", r)
+				args = append(args, fmt.Sprintf("%d", g))
+				args = append(args, fmt.Sprintf("%d", b))
+				if a >= 0 {
+					args = append(args, fmt.Sprintf("%d", a))
+				}
+			} else {
+				// If not a hex code, we expect RGB values
+				if len(args) < 4 {
+					fmt.Println("RGB values must be provided")
+					return
+				}
+			}
+		}
+
 		r, err1 := strconv.Atoi(args[1])
 		g, err2 := strconv.Atoi(args[2])
 		b, err3 := strconv.Atoi(args[3])
@@ -427,6 +448,20 @@ var colorCmd = &cobra.Command{
 			r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 {
 			fmt.Println("RGB values must be numbers between 0 and 255")
 			return
+		}
+
+		// Check for optional brightness parameter
+		var brightness int = -1 // -1 means no brightness set
+		if len(args) == 5 {
+			var err4 error
+			brightness, err4 = strconv.Atoi(args[4])
+			if err4 != nil || brightness < 0 || brightness > 255 {
+        if brightness > 254 {
+          brightness = 254 // Just to not break the user script if they provide 255 or FF as that feels more natural
+        }
+				fmt.Println("Brightness value must be a number between 0 and 254")
+				return
+			}
 		}
 
 		if args[0] == "all" {
@@ -439,8 +474,15 @@ var colorCmd = &cobra.Command{
 				// Convert RGB to XY color space for Hue lights
 				x, y := rgbToXY(uint8(r), uint8(g), uint8(b))
 				light.Xy([]float32{x, y})
+				if brightness >= 0 {
+					light.Bri(uint8(brightness))
+				}
 			}
-			fmt.Printf("All lights color set to RGB(%d, %d, %d)\n", r, g, b)
+			if brightness >= 0 {
+				fmt.Printf("All lights color set to RGB(%d, %d, %d) with brightness %d\n", r, g, b, brightness)
+			} else {
+				fmt.Printf("All lights color set to RGB(%d, %d, %d)\n", r, g, b)
+			}
 			return
 		}
 
@@ -454,13 +496,74 @@ var colorCmd = &cobra.Command{
 			// Convert RGB to XY color space for Hue lights
 			x, y := rgbToXY(uint8(r), uint8(g), uint8(b))
 			light.Xy([]float32{x, y})
-			fmt.Printf("Light '%s' color set to RGB(%d, %d, %d)\n", light.Name, r, g, b)
+			if brightness >= 0 {
+				light.Bri(uint8(brightness))
+				fmt.Printf("Light '%s' color set to RGB(%d, %d, %d) with brightness %d\n", light.Name, r, g, b, brightness)
+			} else {
+				fmt.Printf("Light '%s' color set to RGB(%d, %d, %d)\n", light.Name, r, g, b)
+			}
 		}
 
 		if len(lights) > 1 {
-			fmt.Printf("Total: %d lights color set to RGB(%d, %d, %d)\n", len(lights), r, g, b)
+			if brightness >= 0 {
+				fmt.Printf("Total: %d lights color set to RGB(%d, %d, %d) with brightness %d\n", len(lights), r, g, b, brightness)
+			} else {
+				fmt.Printf("Total: %d lights color set to RGB(%d, %d, %d)\n", len(lights), r, g, b)
+			}
 		}
 	},
+}
+
+func parseHexColor(s string) (r, g, b, a int) {
+	if len(s) == 6 || len(s) == 8 {
+		r64, err := strconv.ParseUint(s[0:2], 16, 8)
+		if err != nil {
+			return 0, 0, 0, -1
+		}
+		g64, err := strconv.ParseUint(s[2:4], 16, 8)
+		if err != nil {
+			return 0, 0, 0, -1
+		}
+		b64, err := strconv.ParseUint(s[4:6], 16, 8)
+		if err != nil {
+			return 0, 0, 0, -1
+		}
+		if len(s) == 8 {
+			a64, err := strconv.ParseUint(s[6:8], 16, 8)
+			if err != nil {
+				return 0, 0, 0, -1
+			}
+			return int(r64), int(g64), int(b64), int(a64)
+		}
+		return int(r64), int(g64), int(b64), -1
+	} else if len(s) == 3 || len(s) == 4 {
+		r64, err := strconv.ParseUint(string(s[0])+string(s[0]), 16, 8)
+		if err != nil {
+			return 0, 0, 0, -1
+		}
+		g64, err := strconv.ParseUint(string(s[1])+string(s[1]), 16, 8)
+		if err != nil {
+			return 0, 0, 0, -1
+		}
+		b64, err := strconv.ParseUint(string(s[2])+string(s[2]), 16, 8)
+		if err != nil {
+			return 0, 0, 0, -1
+		}
+		if len(s) == 4 {
+			a64, err := strconv.ParseUint(string(s[3])+string(s[3]), 16, 8)
+			if err != nil {
+				return 0, 0, 0, -1
+			}
+			return int(r64), int(g64), int(b64), int(a64)
+		}
+		return int(r64), int(g64), int(b64), -1
+	}
+	return 0, 0, 0, -1
+}
+
+func isHexColor(s string) bool {
+	matched, _ := regexp.MatchString(`^[0-9a-fA-F]{6}|^[0-9a-fA-F]{3}$`, s)
+	return matched
 }
 
 var discoverCmd = &cobra.Command{
@@ -663,7 +766,7 @@ var sceneAddCmd = &cobra.Command{
 	Use:   "add [scene-name] [command-type] [light/group] [args...]",
 	Short: "Add a command to a scene",
 	Long: `Add a light command to a scene. Commands will be executed concurrently when the scene is run.
-	
+  
 Examples:
   hue scene add "movie-night" color "Living Room" 255 100 50
   hue scene add "movie-night" brightness "Bedroom" 50
@@ -750,7 +853,7 @@ var sceneRemoveCmd = &cobra.Command{
 	Use:   "remove [scene-name] [command-index]",
 	Short: "Remove a command from a scene or remove entire scene",
 	Long: `Remove a specific command from a scene by index, or remove the entire scene if no index is provided.
-	
+  
 Examples:
   hue scene remove "movie-night" 1    # Remove command at index 1
   hue scene remove "movie-night"      # Remove entire scene`,
@@ -821,14 +924,23 @@ func validateSceneCommand(commandType string, values []string) error {
 			return fmt.Errorf("brightness must be a number between 0 and 254")
 		}
 	case "color":
-		if len(values) != 3 {
-			return fmt.Errorf("color command requires exactly 3 arguments (red green blue)")
+		if len(values) != 3 && len(values) != 4 {
+			return fmt.Errorf("color command requires 3 arguments (red green blue) or 4 arguments (red green blue brightness)")
 		}
 		for i, value := range values {
-			colorValue, err := strconv.Atoi(value)
-			if err != nil || colorValue < 0 || colorValue > 255 {
-				colors := []string{"red", "green", "blue"}
-				return fmt.Errorf("%s value must be a number between 0 and 255", colors[i])
+			if i < 3 {
+				// RGB values
+				colorValue, err := strconv.Atoi(value)
+				if err != nil || colorValue < 0 || colorValue > 255 {
+					colors := []string{"red", "green", "blue"}
+					return fmt.Errorf("%s value must be a number between 0 and 255", colors[i])
+				}
+			} else {
+				// Brightness value (4th parameter)
+				brightness, err := strconv.Atoi(value)
+				if err != nil || brightness < 0 || brightness > 254 {
+					return fmt.Errorf("brightness value must be a number between 0 and 254")
+				}
 			}
 		}
 	}
@@ -980,6 +1092,13 @@ func executeSceneCommand(command SceneCommand) string {
 			b, _ := strconv.Atoi(command.Values[2])
 			x, y := rgbToXY(uint8(r), uint8(g), uint8(b))
 			err = light.Xy([]float32{x, y})
+			// Handle optional brightness parameter
+			if len(command.Values) == 4 {
+				brightness, _ := strconv.Atoi(command.Values[3])
+				if err == nil {
+					err = light.Bri(uint8(brightness))
+				}
+			}
 		}
 
 		if err != nil {
@@ -1046,7 +1165,7 @@ var groupAddCmd = &cobra.Command{
 	Use:   "add [group-name] [light-id/name] [light-id/name] ...",
 	Short: "Add lights to a group",
 	Long: `Create a new group or add lights to an existing group. Lights can be specified by ID or name.
-	
+  
 Examples:
   hue group add "living-room" 1 2 3
   hue group add "bedroom" "Bedside Left" "Bedside Right"
@@ -1130,7 +1249,7 @@ var groupRemoveCmd = &cobra.Command{
 	Use:   "remove [group-name] [light-index]",
 	Short: "Remove a light from a group or remove entire group",
 	Long: `Remove a specific light from a group by index, or remove the entire group if no index is provided.
-	
+  
 Examples:
   hue group remove "living-room" 1    # Remove light at index 1
   hue group remove "living-room"      # Remove entire group`,

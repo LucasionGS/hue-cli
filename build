@@ -1,5 +1,5 @@
 echo Building hue-cli...
-go build -o hue
+go build -o bin/hue
 if [ $? -eq 0 ]; then
     echo "Build successful! Run ./hue --help to get started."
 else
