@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -625,35 +623,34 @@ func deactivateStreaming(groupID string) error {
 }
 
 func streamEffect(area *EntertainmentArea, effectName string, durationSec int) error {
-	// Activate streaming first
+	// Deactivate any existing streaming session first
+	deactivateStreaming(area.ID)
+	time.Sleep(500 * time.Millisecond) // Give bridge time to clean up
+
+	// Activate streaming
 	if err := activateStreaming(area.ID); err != nil {
 		return err
 	}
 	defer deactivateStreaming(area.ID)
 
-	// Get entertainment key (clientkey) from bridge
-	bridgeConfig, err := loadBridgeConfig()
+	// Try DTLS streaming first
+	dtlsStream, err := createDTLSStreamConnection(area)
 	if err != nil {
-		return err
+		// Fall back to HTTP if DTLS fails
+		fmt.Printf("DTLS connection failed (%v), falling back to HTTP API\n", err)
+		return streamEffectHTTP(area, effectName, durationSec)
 	}
+	defer dtlsStream.Close()
 
-	// Get the entertainment configuration which includes the clientkey
-	url := buildBridgeURL(bridgeConfig.Host, fmt.Sprintf("/api/%s/config", bridgeConfig.Username))
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to get bridge config: %v", err)
-	}
-	defer resp.Body.Close()
+	fmt.Println("✅ DTLS streaming connected - High-speed mode active (~60fps)")
 
-	body, _ := io.ReadAll(resp.Body)
-	var config map[string]interface{}
-	if err := json.Unmarshal(body, &config); err != nil {
-		return err
-	}
+	// Stream the effect using DTLS
+	return dtlsStream.StreamEffect(effectName, durationSec)
+}
 
-	// Note: For full DTLS implementation, you would need the clientkey from the config
-	// For now, we'll use HTTP updates as a fallback demonstration
-	fmt.Println("Note: Using HTTP API for effects. Full DTLS streaming requires additional setup.")
+// streamEffectHTTP is the fallback HTTP implementation
+func streamEffectHTTP(area *EntertainmentArea, effectName string, durationSec int) error {
+	fmt.Println("Note: Using HTTP API for effects (~10 updates/sec)")
 
 	// Run the effect
 	switch effectName {
@@ -814,120 +811,6 @@ func runRandomEffect(area *EntertainmentArea, durationSec int) error {
 		}
 	}
 
-	return nil
-}
-
-// DTLS Streaming (Advanced Implementation)
-
-// EntertainmentStream represents a DTLS streaming connection
-type EntertainmentStream struct {
-	conn     *tls.Conn
-	lights   []string
-	isActive bool
-}
-
-// Note: Full DTLS implementation requires:
-// 1. PSK-TLS cipher suite support
-// 2. Entertainment key (clientkey) from bridge
-// 3. DTLS over UDP (not standard TLS)
-// 4. Binary protocol encoding
-
-func createDTLSStream(area *EntertainmentArea, clientKey string) (*EntertainmentStream, error) {
-	bridgeConfig, err := loadBridgeConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	// DTLS PSK configuration
-	// Note: This is a simplified example. Full implementation requires:
-	// - PSK cipher suite (TLS_PSK_WITH_AES_128_GCM_SHA256)
-	// - UDP transport instead of TCP
-	// - Proper PSK callback configuration
-
-	config := &tls.Config{
-		InsecureSkipVerify: true, // In production, verify the bridge certificate
-		// PSK configuration would go here
-	}
-
-	// Entertainment streaming uses port 2100 with DTLS
-	addr := fmt.Sprintf("%s:2100", bridgeConfig.Host)
-
-	// Note: Standard tls.Dial uses TCP, but Hue Entertainment requires UDP+DTLS
-	// A full implementation would need a DTLS library like github.com/pion/dtls
-	conn, err := tls.Dial("tcp", addr, config)
-	if err != nil {
-		return nil, fmt.Errorf("DTLS connection failed: %v (Note: Full DTLS/UDP implementation required)", err)
-	}
-
-	stream := &EntertainmentStream{
-		conn:     conn,
-		lights:   area.Lights,
-		isActive: true,
-	}
-
-	return stream, nil
-}
-
-// SendLightStates sends light color data via DTLS streaming
-func (s *EntertainmentStream) SendLightStates(lightStates map[string]RGB) error {
-	if !s.isActive {
-		return fmt.Errorf("stream not active")
-	}
-
-	// Entertainment protocol message format:
-	// Header: "HueStream" (9 bytes)
-	// Version: 0x01 0x00 (2 bytes)
-	// Sequence: uint8 (1 byte)
-	// Reserved: 0x00 0x00 (2 bytes)
-	// Color space: 0x00 (RGB), 0x01 (XY+Brightness) (1 byte)
-	// Reserved: 0x00 (1 byte)
-	// Then for each light:
-	//   Light ID: uint8 (1 byte) - 0-based index
-	//   RGB: uint16 R, uint16 G, uint16 B (6 bytes per light)
-
-	buf := new(bytes.Buffer)
-
-	// Header
-	buf.WriteString("HueStream")
-
-	// Version
-	binary.Write(buf, binary.BigEndian, uint16(0x0100))
-
-	// Sequence number (increments each message)
-	binary.Write(buf, binary.BigEndian, uint8(0))
-
-	// Reserved
-	binary.Write(buf, binary.BigEndian, uint16(0))
-
-	// Color space (0 = RGB)
-	buf.WriteByte(0x00)
-
-	// Reserved
-	buf.WriteByte(0x00)
-
-	// Light data
-	for i, lightID := range s.lights {
-		if rgb, ok := lightStates[lightID]; ok {
-			buf.WriteByte(uint8(i))
-			binary.Write(buf, binary.BigEndian, uint16(rgb.R)<<8)
-			binary.Write(buf, binary.BigEndian, uint16(rgb.G)<<8)
-			binary.Write(buf, binary.BigEndian, uint16(rgb.B)<<8)
-		}
-	}
-
-	_, err := s.conn.Write(buf.Bytes())
-	return err
-}
-
-type RGB struct {
-	R, G, B uint8
-}
-
-func (s *EntertainmentStream) Close() error {
-	s.isActive = false
-	if s.conn != nil {
-		return s.conn.Close()
-	}
 	return nil
 }
 
