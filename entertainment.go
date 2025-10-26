@@ -226,6 +226,60 @@ var entertainStreamCmd = &cobra.Command{
 func init() {
 	entertainStreamCmd.AddCommand(entertainStreamStartCmd)
 	entertainStreamCmd.AddCommand(entertainStreamEffectCmd)
+	entertainStreamCmd.AddCommand(entertainStreamServerCmd)
+}
+
+var entertainStreamServerCmd = &cobra.Command{
+	Use:   "server <area-name-or-id> [port]",
+	Short: "Start WebSocket server for real-time streaming",
+	Long: `Start a WebSocket server that allows external applications to stream light data in real-time.
+	
+The server will:
+- Open a DTLS connection to the bridge
+- Start a WebSocket server on the specified port (default: 8080)
+- Accept JSON messages with light colors from WebSocket clients
+- Stream the colors to lights at up to 60fps
+
+Example:
+  hue entertain stream server "Lucas Room"
+  hue entertain stream server "Lucas Room" 9000`,
+	Args: cobra.RangeArgs(1, 2),
+	Run: func(cmd *cobra.Command, args []string) {
+		areaIdentifier := args[0]
+		port := 8080
+
+		if len(args) > 1 {
+			fmt.Sscanf(args[1], "%d", &port)
+		}
+
+		// Find the entertainment area
+		areas, err := getEntertainmentAreasFromBridge()
+		if err != nil {
+			fmt.Printf("Error loading entertainment areas: %v\n", err)
+			return
+		}
+
+		var area *EntertainmentArea
+		for i := range areas {
+			if areas[i].ID == areaIdentifier || areas[i].Name == areaIdentifier {
+				area = &areas[i]
+				break
+			}
+		}
+
+		if area == nil {
+			fmt.Printf("Entertainment area '%s' not found\n", areaIdentifier)
+			fmt.Println("Use 'hue entertain list' to see available areas")
+			return
+		}
+
+		fmt.Printf("Starting WebSocket server for '%s'...\n", area.Name)
+
+		if err := StartWebSocketServer(area, port); err != nil {
+			fmt.Printf("Error starting server: %v\n", err)
+			return
+		}
+	},
 }
 
 var entertainStreamStartCmd = &cobra.Command{
