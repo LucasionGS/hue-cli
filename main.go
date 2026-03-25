@@ -75,7 +75,7 @@ func main() {
 			parentCmdName := cmd.Parent().Name()
 			skipInit := cmdName == "auth" || cmdName == "discover" || cmdName == "status" ||
 				cmdName == "find" || cmdName == "scenes" || cmdName == "groups" ||
-				(cmdName == "list" && (parentCmdName == "scene" || parentCmdName == "group" || parentCmdName == "entertain")) ||
+				(cmdName == "list" && (parentCmdName == "scene" || parentCmdName == "entertain")) ||
 				(cmdName == "remove" && (parentCmdName == "scene" || parentCmdName == "group")) ||
 				(cmdName == "area" && parentCmdName == "entertain")
 
