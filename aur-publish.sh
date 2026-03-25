@@ -42,6 +42,15 @@ fi
 # Copy PKGBUILD into the AUR repo
 cp "${SCRIPT_DIR}/PKGBUILD" "${AUR_DIR}/PKGBUILD"
 
+# Resolve the real version from the project git history and patch the AUR copy.
+# The static pkgver=r0.000000 in PKGBUILD is intentional for the source repo;
+# makepkg --printsrcinfo can't run pkgver() here because $srcdir doesn't exist.
+GENERATED_VERSION=$(printf "r%s.%s" \
+    "$(git -C "${SCRIPT_DIR}" rev-list --count HEAD)" \
+    "$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD)")
+echo "Package version: ${GENERATED_VERSION}"
+sed -i "s/^pkgver=.*/pkgver=${GENERATED_VERSION}/" "${AUR_DIR}/PKGBUILD"
+
 # Generate .SRCINFO
 echo "Generating .SRCINFO..."
 (cd "${AUR_DIR}" && makepkg --printsrcinfo > .SRCINFO)
